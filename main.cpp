@@ -66,78 +66,97 @@ Hit DetectSceneHit(Ray& ray)
 	return ret;
 }
 
-//Determines the color of the passed in ray
+// Determines the color of the passed in ray
 Hit RayCast(Ray& ray, int depth)
 {
-	Hit hit;
-	//Returns background color if maximum recursion depth was hit
-	if (depth == 0) {
-		hit.material_.color_ = ambientLight;
-		hit.t_ = std::numeric_limits<float>::infinity();
-		return hit;
-	}
-	//Find object intersection
-	Hit rayHit = DetectSceneHit(ray);
-	if (rayHit.t_ != std::numeric_limits<float>::infinity()) {
-		// --- 开始填写代码 ---
-		
-		// 1. 计算相关向量
-		// L: 光源方向向量 (从撞击点指向光源)
-		Vector3d L = light.P_ - rayHit.P_;
-		L.normalize();
-		
-		// V: 视线方向向量 (从撞击点指向相机/射线原点)
-		Vector3d V = ray.origin_ - rayHit.P_;
-		V.normalize();
-		
-		// N: 法线向量
-		Vector3d N = rayHit.N_;
-		N.normalize();
+    Hit hit;
+    // Returns background color if maximum recursion depth was hit
+    if (depth == 0) {
+        hit.material_.color_ = ambientLight;
+        hit.t_ = std::numeric_limits<float>::infinity();
+        return hit;
+    }
 
-		// 2. 环境光 (Ambient)
-		// 环境光 = 材质环境系数 * 环境光颜色
-		Color finalColor = rayHit.material_.ambientColor_ * ambientLight;
+    // Find object intersection (Primary Ray)
+    Hit rayHit = DetectSceneHit(ray);
 
-		// 3. 漫反射 (Diffuse)
-		// 漫反射 = 材质漫反射颜色 * 光源颜色 * (N · L)
-		float nDotL = N.dot(L); // 使用 dot() 方法而不是 * 运算符
-		if (nDotL > 0) {
-			// 计算漫反射分量
-			Color diffuseBase = rayHit.material_.diffuseColor_ * light.color_;
-			Color diffusePart = diffuseBase * nDotL;
-			
-			// 累加漫反射 (注意：使用中间变量以匹配 Color& 接口)
-			finalColor = finalColor + diffusePart;
+    if (rayHit.t_ != std::numeric_limits<float>::infinity()) {
+        // --- 核心修改开始 ---
 
-			// 4. 镜面反射 (Specular) - 使用 Blinn-Phong 模型
-			// 半程向量 H = (L + V) 的单位向量
-			Vector3d H = L + V;
-			H.normalize();
-			
-			float nDotH = N.dot(H);
-			if (nDotH > 0) {
-				// 镜面反射强度 = (N · H) ^ 高光指数
-				float specFactor = pow(nDotH, rayHit.material_.specExponent_);
-				
-				// 计算镜面反射分量
-				Color specBase = rayHit.material_.specularColor_ * light.color_;
-				Color specPart = specBase * specFactor;
-				
-				// 累加镜面反射
-				finalColor = finalColor + specPart;
-			}
-		}
+        // 1. 计算光照向量与距离
+        // 我们需要保留未归一化的向量来计算由于光源的距离
+        Vector3d lightVec = light.P_ - rayHit.P_;
+        float distToLight = lightVec.length(); // 获取撞击点到光源的距离
 
-		// 5. 赋值最终颜色
-		rayHit.material_.color_ = finalColor;
+        // L: 光源方向向量 (归一化)
+        Vector3d L = lightVec;
+        L.normalize();
 
-		// --- 填写代码结束 ---
-			return rayHit;
-	}
-	else {
-		rayHit.material_.color_ = Color(0.2f, 0.2f, 0.2f);
-		return rayHit;
-	}
+        // V: 视线方向向量
+        Vector3d V = ray.origin_ - rayHit.P_;
+        V.normalize();
+
+        // N: 法线向量
+        Vector3d N = rayHit.N_;
+        N.normalize();
+
+        // 2. 阴影检测 (Shadow Ray)
+        bool inShadow = false;
+
+        // 构建阴影射线
+        Ray shadowRay;
+        // 【关键】偏移起点 (Shadow Acne Bias)：
+        // 沿着光线方向微小移动起点，防止射线击中物体自身导致的“斑点”
+        shadowRay.origin_ = rayHit.P_ + L * 0.001f; 
+        shadowRay.directionVector_ = L;
+
+        // 发射阴影射线检测遮挡
+        Hit shadowHit = DetectSceneHit(shadowRay);
+
+        // 如果击中了物体，并且击中点在光源之前 (t < distToLight)，则说明有遮挡
+        if (shadowHit.t_ < distToLight) {
+            inShadow = true;
+        }
+
+        // 3. 环境光 (Ambient)
+        // 环境光永远存在，不受阴影影响
+        Color finalColor = rayHit.material_.ambientColor_ * ambientLight;
+
+        // 4. 漫反射 (Diffuse) & 5. 镜面反射 (Specular)
+        // 只有当“不在阴影中”时，才叠加直射光照效果
+        if (!inShadow) {
+            float nDotL = N.dot(L);
+            
+            if (nDotL > 0) {
+                // --- 计算漫反射 ---
+                Color diffuseBase = rayHit.material_.diffuseColor_ * light.color_;
+                finalColor = finalColor + (diffuseBase * nDotL);
+
+                // --- 计算镜面反射 (Blinn-Phong) ---
+                Vector3d H = L + V;
+                H.normalize();
+                float nDotH = N.dot(H);
+                
+                if (nDotH > 0) {
+                    float specFactor = pow(nDotH, rayHit.material_.specExponent_);
+                    Color specBase = rayHit.material_.specularColor_ * light.color_;
+                    finalColor = finalColor + (specBase * specFactor);
+                }
+            }
+        }
+
+        // 赋值最终颜色
+        rayHit.material_.color_ = finalColor;
+
+        // --- 核心修改结束 ---
+        
+        return rayHit;
+    }
+    else {
+        // 背景色
+        rayHit.material_.color_ = Color(0.1f, 0.1f, 0.1f); // 稍微调暗一点背景以凸显光照
+        return rayHit;
+    }
 }
 
 void RenderScene()
@@ -212,3 +231,4 @@ int main(int argc, char* argv[])
 	return 0;
 
 }
+
