@@ -79,9 +79,59 @@ Hit RayCast(Ray& ray, int depth)
 	//Find object intersection
 	Hit rayHit = DetectSceneHit(ray);
 	if (rayHit.t_ != std::numeric_limits<float>::infinity()) {
-		// 此处填写代码，对rayHit.material_.color_赋值
-		rayHit.material_.color_ = Color(0.1f, 0.1f, 0.1f);//仅用于程序正常运行，填写代码后应删除
-			//填写代码结束
+		// --- 开始填写代码 ---
+		
+		// 1. 计算相关向量
+		// L: 光源方向向量 (从撞击点指向光源)
+		Vector3d L = light.P_ - rayHit.P_;
+		L.normalize();
+		
+		// V: 视线方向向量 (从撞击点指向相机/射线原点)
+		Vector3d V = ray.origin_ - rayHit.P_;
+		V.normalize();
+		
+		// N: 法线向量
+		Vector3d N = rayHit.N_;
+		N.normalize();
+
+		// 2. 环境光 (Ambient)
+		// 环境光 = 材质环境系数 * 环境光颜色
+		Color finalColor = rayHit.material_.ambientColor_ * ambientLight;
+
+		// 3. 漫反射 (Diffuse)
+		// 漫反射 = 材质漫反射颜色 * 光源颜色 * (N · L)
+		float nDotL = N.dot(L); // 使用 dot() 方法而不是 * 运算符
+		if (nDotL > 0) {
+			// 计算漫反射分量
+			Color diffuseBase = rayHit.material_.diffuseColor_ * light.color_;
+			Color diffusePart = diffuseBase * nDotL;
+			
+			// 累加漫反射 (注意：使用中间变量以匹配 Color& 接口)
+			finalColor = finalColor + diffusePart;
+
+			// 4. 镜面反射 (Specular) - 使用 Blinn-Phong 模型
+			// 半程向量 H = (L + V) 的单位向量
+			Vector3d H = L + V;
+			H.normalize();
+			
+			float nDotH = N.dot(H);
+			if (nDotH > 0) {
+				// 镜面反射强度 = (N · H) ^ 高光指数
+				float specFactor = pow(nDotH, rayHit.material_.specExponent_);
+				
+				// 计算镜面反射分量
+				Color specBase = rayHit.material_.specularColor_ * light.color_;
+				Color specPart = specBase * specFactor;
+				
+				// 累加镜面反射
+				finalColor = finalColor + specPart;
+			}
+		}
+
+		// 5. 赋值最终颜色
+		rayHit.material_.color_ = finalColor;
+
+		// --- 填写代码结束 ---
 			return rayHit;
 	}
 	else {
@@ -160,4 +210,5 @@ int main(int argc, char* argv[])
 		delete objects[i];
 	}
 	return 0;
+
 }
