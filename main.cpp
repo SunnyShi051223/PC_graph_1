@@ -5,9 +5,10 @@
 #include "light.h"
 #include "sphere.h"
 
+#include "plane.h"
 
 //视口viewport
-const int MAX_RECURSION_DEPTH = 1;
+const int MAX_RECURSION_DEPTH = 3; //new
 const float VIEWPORT_X = 15;
 const float VIEWPORT_Y = 11.25;
 const float FOCAL_LENGTH = -2.5;
@@ -26,27 +27,49 @@ Color ambientLight;
 std::vector<Object*> objects;
 GLubyte pixelData[WINDOW_H][WINDOW_W][3];
 
+
 void ConstructScene()
 {
-	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT); // clear the screen
-	light = Light(Color(1.0f, 1.0f, 1.0f), Vector3d(-3.0f, 15.0f, -0.5f));
-	ambientLight = Color(0.2f, 0.2f, 0.2f);
-	Sphere* sphere = new Sphere;
-	if (sphere == NULL) {
-		std::cerr << "Can't allocate memory for Sphere." << std::endl;
-		exit(-1);
-	}
-	sphere->center_ = Vector3d(0.0f, -1.25f, 0.0f);
-	sphere->radius_ = 1.0;
-	sphere->material_.diffuseColor_ = Color(0.6f, 0.6f, 0.0f);
-	sphere->material_.ambientColor_ = Color(0.6f, 0.6f, 0.0f);
-	sphere->material_.specularColor_ = Color(0.3f, 0.3f, 0.3f);
-	sphere->material_.alpha_ = 0.6;
-	sphere->material_.refractIndex_ = 1.5;
-	sphere->material_.specExponent_ = 10.0;
-	objects.push_back(sphere);
-}
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	light = Light(Color(1.0f, 1.0f, 1.0f), Vector3d(-3.0f, 15.0f, 10.0f)); // 调整光源位置以便产生更好看的阴影
+	ambientLight = Color(0.1f, 0.1f, 0.1f); // 调暗环境光，增强对比
 
+	// 清除旧物体（如果需要多次调用的话，防止内存泄漏）
+	for (auto obj : objects) delete obj;
+	objects.clear();
+
+	// --- 物体 1: 镜面球体 ---
+	Sphere* sphere = new Sphere;
+	sphere->center_ = Vector3d(0.0f, 0.0f, 0.0f); // 放在中心
+	sphere->radius_ = 1.0;
+	sphere->material_.diffuseColor_ = Color(0.7f, 0.1f, 0.1f); // 红色
+	sphere->material_.ambientColor_ = Color(0.1f, 0.0f, 0.0f);
+	sphere->material_.specularColor_ = Color(1.0f, 1.0f, 1.0f);
+	sphere->material_.specExponent_ = 50.0; // 更亮更集中的高光
+	sphere->material_.reflectionCoeff_ = 0.5; // 50% 反射率
+	objects.push_back(sphere);
+
+	// --- 物体 2: 另外一个球体 (测试遮挡和相互反射) ---
+	Sphere* sphere2 = new Sphere;
+	sphere2->center_ = Vector3d(1.5f, -0.5f, 1.0f);
+	sphere2->radius_ = 0.5;
+	sphere2->material_.diffuseColor_ = Color(0.1f, 0.1f, 0.8f); // 蓝色
+	sphere2->material_.ambientColor_ = Color(0.0f, 0.0f, 0.1f);
+	sphere2->material_.specularColor_ = Color(1.0f, 1.0f, 1.0f);
+	sphere2->material_.specExponent_ = 20.0;
+	sphere2->material_.reflectionCoeff_ = 0.2;
+	objects.push_back(sphere2);
+
+	// --- 物体 3: 地板平面 ---
+	// 法线向上 (0,1,0)，位置在 y = -1.0 处
+	Plane* floor = new Plane(Vector3d(0.0f, -1.0f, 0.0f), Vector3d(0.0f, 1.0f, 0.0f));
+	floor->material_.diffuseColor_ = Color(0.5f, 0.5f, 0.5f); // 灰色地板
+	floor->material_.ambientColor_ = Color(0.1f, 0.1f, 0.1f);
+	floor->material_.specularColor_ = Color(0.0f, 0.0f, 0.0f); // 地板通常没有强高光
+	floor->material_.specExponent_ = 1.0;
+	floor->material_.reflectionCoeff_ = 0.3; // 地板也有一定反射，能看到球的倒影
+	objects.push_back(floor);
+}
 Hit DetectSceneHit(Ray& ray)
 {
 	Hit ret, hit;
@@ -67,79 +90,93 @@ Hit DetectSceneHit(Ray& ray)
 }
 
 //Determines the color of the passed in ray
+// main.cpp 中替换 RayCast
 Hit RayCast(Ray& ray, int depth)
 {
 	Hit hit;
-	//Returns background color if maximum recursion depth was hit
+	// 递归深度耗尽或未击中物体，返回背景色（或环境光）
 	if (depth == 0) {
-		hit.material_.color_ = ambientLight;
+		hit.material_.color_ = Color(0.0f, 0.0f, 0.0f); // 黑色背景
 		hit.t_ = std::numeric_limits<float>::infinity();
 		return hit;
 	}
-	//Find object intersection
+
 	Hit rayHit = DetectSceneHit(ray);
+
+	// 如果击中了物体
 	if (rayHit.t_ != std::numeric_limits<float>::infinity()) {
-		// --- 开始填写代码 ---
-		
-		// 1. 计算相关向量
-		// L: 光源方向向量 (从撞击点指向光源)
+
+		// --- 1. 基础环境光 ---
+		Color finalColor = rayHit.material_.ambientColor_ * ambientLight;
+
+		// 准备向量
 		Vector3d L = light.P_ - rayHit.P_;
+		float distToLight = L.modul(); // 光源距离
 		L.normalize();
-		
-		// V: 视线方向向量 (从撞击点指向相机/射线原点)
 		Vector3d V = ray.origin_ - rayHit.P_;
 		V.normalize();
-		
-		// N: 法线向量
 		Vector3d N = rayHit.N_;
 		N.normalize();
 
-		// 2. 环境光 (Ambient)
-		// 环境光 = 材质环境系数 * 环境光颜色
-		Color finalColor = rayHit.material_.ambientColor_ * ambientLight;
+		// --- 2. 阴影检测 (Shadows) ---
+		// 发射一条从击中点指向光源的射线
+		// 偏移一点点(0.001)避免打到物体自己(Shadow Acne)
+		Ray shadowRay(rayHit.P_ + L * 0.001f, L);
+		Hit shadowHit = DetectSceneHit(shadowRay);
 
-		// 3. 漫反射 (Diffuse)
-		// 漫反射 = 材质漫反射颜色 * 光源颜色 * (N · L)
-		float nDotL = N.dot(L); // 使用 dot() 方法而不是 * 运算符
-		if (nDotL > 0) {
-			// 计算漫反射分量
-			Color diffuseBase = rayHit.material_.diffuseColor_ * light.color_;
-			Color diffusePart = diffuseBase * nDotL;
-			
-			// 累加漫反射 (注意：使用中间变量以匹配 Color& 接口)
-			finalColor = finalColor + diffusePart;
+		// 如果阴影射线击中了物体，且该物体比光源更近，说明我们在阴影里
+		bool inShadow = (shadowHit.t_ < distToLight);
 
-			// 4. 镜面反射 (Specular) - 使用 Blinn-Phong 模型
-			// 半程向量 H = (L + V) 的单位向量
-			Vector3d H = L + V;
-			H.normalize();
-			
-			float nDotH = N.dot(H);
-			if (nDotH > 0) {
-				// 镜面反射强度 = (N · H) ^ 高光指数
-				float specFactor = pow(nDotH, rayHit.material_.specExponent_);
-				
-				// 计算镜面反射分量
-				Color specBase = rayHit.material_.specularColor_ * light.color_;
-				Color specPart = specBase * specFactor;
-				
-				// 累加镜面反射
-				finalColor = finalColor + specPart;
+		if (!inShadow) {
+			// 不在阴影中，计算漫反射和镜面反射 (Blinn-Phong)
+			float nDotL = N.dot(L);
+			if (nDotL > 0) {
+				// Diffuse
+				Color diffuse = (rayHit.material_.diffuseColor_ * light.color_) * nDotL;
+				finalColor = finalColor + diffuse;
+
+				// Specular
+				Vector3d H = L + V;
+				H.normalize();
+				float nDotH = N.dot(H);
+				if (nDotH > 0) {
+					float specFactor = pow(nDotH, rayHit.material_.specExponent_);
+					Color specular = (rayHit.material_.specularColor_ * light.color_) * specFactor;
+					finalColor = finalColor + specular;
+				}
 			}
 		}
 
-		// 5. 赋值最终颜色
-		rayHit.material_.color_ = finalColor;
+		// --- 3. 递归反射 (Reflections) ---
+		if (rayHit.material_.reflectionCoeff_ > 0) {
+			// 计算反射向量 R = V - 2(V·N)N 
+			// 注意：这里的 ray.directionVector_ 是入射方向 I，公式通常为 I - 2(I·N)N
+			Vector3d I = ray.directionVector_;
+			I.normalize();
+			Vector3d R = I - N * (2.0f * I.dot(N));
+			R.normalize();
 
-		// --- 填写代码结束 ---
-			return rayHit;
-	}
-	else {
-		rayHit.material_.color_ = Color(0.2f, 0.2f, 0.2f);
+			// 递归调用 RayCast
+			Ray reflectRay(rayHit.P_ + R * 0.001f, R);
+			Hit reflectHit = RayCast(reflectRay, depth - 1);
+
+			// 混合反射颜色
+			if (reflectHit.t_ != std::numeric_limits<float>::infinity()) {
+				Color reflectedColor = reflectHit.material_.color_ * rayHit.material_.reflectionCoeff_;
+				finalColor = finalColor + reflectedColor;
+			}
+		}
+
+		rayHit.material_.color_ = finalColor;
 		return rayHit;
 	}
+	else {
+		// 背景色
+		hit.material_.color_ = Color(0.1f, 0.1f, 0.1f);
+		hit.t_ = std::numeric_limits<float>::infinity();
+		return hit;
+	}
 }
-
 void RenderScene()
 {
 	//Iterate through all screen pixels
@@ -210,5 +247,4 @@ int main(int argc, char* argv[])
 		delete objects[i];
 	}
 	return 0;
-
 }
